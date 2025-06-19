@@ -1,2 +1,5 @@
 gradio
 requests
+llama-index 
+llama-index-agent-openai 
+openai
