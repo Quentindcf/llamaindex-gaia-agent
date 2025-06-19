@@ -3,6 +3,9 @@ import gradio as gr
 import requests
 import inspect
 import pandas as pd
+from llama_index.core.tools import FunctionTool
+from llama_index.agent.openai import OpenAIAgent
+from llama_index.core.llms import OpenAI
 
 # (Keep Constants as is)
 # --- Constants ---
@@ -12,12 +15,31 @@ DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 # ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
 class BasicAgent:
     def __init__(self):
-        print("BasicAgent initialized.")
+        self.llm = OpenAI(model="gpt-4", temperature=0)  # Or "gpt-3.5-turbo"
+        self.tools = self.load_tools()
+        self.agent = OpenAIAgent.from_tools(
+            tools=self.tools,
+            llm=self.llm,
+            verbose=True
+        )
+        print("Agent initialised")
+
+    def load_tools(self):
+        # Sample tool: a basic math function
+        def add_numbers(a: float, b: float) -> float:
+            return a + b
+
+        add_tool = FunctionTool.from_defaults(fn=add_numbers, name="AddNumbers")
+        return [add_tool]
+    
     def __call__(self, question: str) -> str:
         print(f"Agent received question (first 50 chars): {question[:50]}...")
-        fixed_answer = "This is a default answer."
-        print(f"Agent returning fixed answer: {fixed_answer}")
-        return fixed_answer
+        try:
+            response = self.agent.chat(question)
+            return str(response)
+        except Exception as e:
+            print(f"Agent error: {e}")
+            return f"[Agent Error] {e}"
 
 def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
@@ -92,52 +114,52 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
     # 4. Prepare Submission 
-    submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
-    status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
-    print(status_update)
+    # submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
+    # status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
+    # print(status_update)
 
     # 5. Submit
-    print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
-    try:
-        response = requests.post(submit_url, json=submission_data, timeout=60)
-        response.raise_for_status()
-        result_data = response.json()
-        final_status = (
-            f"Submission Successful!\n"
-            f"User: {result_data.get('username')}\n"
-            f"Overall Score: {result_data.get('score', 'N/A')}% "
-            f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
-            f"Message: {result_data.get('message', 'No message received.')}"
-        )
-        print("Submission successful.")
-        results_df = pd.DataFrame(results_log)
-        return final_status, results_df
-    except requests.exceptions.HTTPError as e:
-        error_detail = f"Server responded with status {e.response.status_code}."
-        try:
-            error_json = e.response.json()
-            error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
-        except requests.exceptions.JSONDecodeError:
-            error_detail += f" Response: {e.response.text[:500]}"
-        status_message = f"Submission Failed: {error_detail}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
-    except requests.exceptions.Timeout:
-        status_message = "Submission Failed: The request timed out."
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
-    except requests.exceptions.RequestException as e:
-        status_message = f"Submission Failed: Network error - {e}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
-    except Exception as e:
-        status_message = f"An unexpected error occurred during submission: {e}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
+    # print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
+    # try:
+    #     response = requests.post(submit_url, json=submission_data, timeout=60)
+    #     response.raise_for_status()
+    #     result_data = response.json()
+    #     final_status = (
+    #         f"Submission Successful!\n"
+    #         f"User: {result_data.get('username')}\n"
+    #         f"Overall Score: {result_data.get('score', 'N/A')}% "
+    #         f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
+    #         f"Message: {result_data.get('message', 'No message received.')}"
+    #     )
+    #     print("Submission successful.")
+    #     results_df = pd.DataFrame(results_log)
+    #     return final_status, results_df
+    # except requests.exceptions.HTTPError as e:
+    #     error_detail = f"Server responded with status {e.response.status_code}."
+    #     try:
+    #         error_json = e.response.json()
+    #         error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
+    #     except requests.exceptions.JSONDecodeError:
+    #         error_detail += f" Response: {e.response.text[:500]}"
+    #     status_message = f"Submission Failed: {error_detail}"
+    #     print(status_message)
+    #     results_df = pd.DataFrame(results_log)
+    #     return status_message, results_df
+    # except requests.exceptions.Timeout:
+    #     status_message = "Submission Failed: The request timed out."
+    #     print(status_message)
+    #     results_df = pd.DataFrame(results_log)
+    #     return status_message, results_df
+    # except requests.exceptions.RequestException as e:
+    #     status_message = f"Submission Failed: Network error - {e}"
+    #     print(status_message)
+    #     results_df = pd.DataFrame(results_log)
+    #     return status_message, results_df
+    # except Exception as e:
+    #     status_message = f"An unexpected error occurred during submission: {e}"
+    #     print(status_message)
+    #     results_df = pd.DataFrame(results_log)
+    #     return status_message, results_df
 
 
 # --- Build Gradio Interface using Blocks ---
@@ -189,7 +211,7 @@ if __name__ == "__main__":
         print(f"   Repo Tree URL: https://huggingface.co/spaces/{space_id_startup}/tree/main")
     else:
         print("ℹ️  SPACE_ID environment variable not found (running locally?). Repo URL cannot be determined.")
-
+ 
     print("-"*(60 + len(" App Starting ")) + "\n")
 
     print("Launching Gradio Interface for Basic Agent Evaluation...")
