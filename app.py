@@ -1,11 +1,13 @@
 import os
 import gradio as gr
 import requests
+import re
 import inspect
 import pandas as pd
 from llama_index.core.tools import FunctionTool
 from llama_index.agent.openai import OpenAIAgent
-from llama_index.core.llms import OpenAI
+from llama_index.llms.openai import OpenAI
+from llama_index.tools.wikipedia import WikipediaToolSpec
 
 # (Keep Constants as is)
 # --- Constants ---
@@ -13,14 +15,17 @@ DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
 # --- Basic Agent Definition ---
 # ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
+OPENAI_API_KEY = "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"
+os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
 class BasicAgent:
     def __init__(self):
-        self.llm = OpenAI(model="gpt-4", temperature=0)  # Or "gpt-3.5-turbo"
+        self.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)  # Or "gpt-4"
         self.tools = self.load_tools()
         self.agent = OpenAIAgent.from_tools(
             tools=self.tools,
             llm=self.llm,
-            verbose=True
+            verbose=True,
+            max_function_calls=1
         )
         print("Agent initialised")
 
@@ -30,7 +35,8 @@ class BasicAgent:
             return a + b
 
         add_tool = FunctionTool.from_defaults(fn=add_numbers, name="AddNumbers")
-        return [add_tool]
+        wikitools = WikipediaToolSpec().to_tool_list()
+        return [add_tool]+wikitools
     
     def __call__(self, question: str) -> str:
         print(f"Agent received question (first 50 chars): {question[:50]}...")
@@ -95,14 +101,26 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
-    for item in questions_data:
+    for item in questions_data[:2]:
         task_id = item.get("task_id")
         question_text = item.get("question")
+        general_prompt = '''You are a general AI assistant. 
+                            I will ask you a question. You will answer in this format: [YOUR ANSWER].
+                            You will answer with the following guidelines:
+                            Your answer should be a number OR as few words as possible OR a comma separated list of numbers and/or strings. 
+                            If you are asked for a number, don't use comma to write your number neither use units such as $ or percent sign unless specified otherwise. 
+                            If you are asked for a string, don't use articles, neither abbreviations (e.g. for cities), and write the digits in plain text unless specified otherwise. 
+                            If you are asked for a comma separated list, apply the above rules depending of whether the element to be put in the list is a number or a string.
+                            This is the question: '''
+        final_prompt = general_prompt + question_text
         if not task_id or question_text is None:
             print(f"Skipping item with missing task_id or question: {item}")
             continue
         try:
-            submitted_answer = agent(question_text)
+            submitted_answer = agent(final_prompt)
+            submitted_answer = re.findall(r'\[(.*?)\]', submitted_answer)
+            if len(submitted_answer)==1:
+                submitted_answer = submitted_answer[0]
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
             results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": submitted_answer})
         except Exception as e:
@@ -114,52 +132,52 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
     # 4. Prepare Submission 
-    # submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
-    # status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
-    # print(status_update)
+    submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
+    status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
+    print(status_update)
 
     # 5. Submit
-    # print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
-    # try:
-    #     response = requests.post(submit_url, json=submission_data, timeout=60)
-    #     response.raise_for_status()
-    #     result_data = response.json()
-    #     final_status = (
-    #         f"Submission Successful!\n"
-    #         f"User: {result_data.get('username')}\n"
-    #         f"Overall Score: {result_data.get('score', 'N/A')}% "
-    #         f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
-    #         f"Message: {result_data.get('message', 'No message received.')}"
-    #     )
-    #     print("Submission successful.")
-    #     results_df = pd.DataFrame(results_log)
-    #     return final_status, results_df
-    # except requests.exceptions.HTTPError as e:
-    #     error_detail = f"Server responded with status {e.response.status_code}."
-    #     try:
-    #         error_json = e.response.json()
-    #         error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
-    #     except requests.exceptions.JSONDecodeError:
-    #         error_detail += f" Response: {e.response.text[:500]}"
-    #     status_message = f"Submission Failed: {error_detail}"
-    #     print(status_message)
-    #     results_df = pd.DataFrame(results_log)
-    #     return status_message, results_df
-    # except requests.exceptions.Timeout:
-    #     status_message = "Submission Failed: The request timed out."
-    #     print(status_message)
-    #     results_df = pd.DataFrame(results_log)
-    #     return status_message, results_df
-    # except requests.exceptions.RequestException as e:
-    #     status_message = f"Submission Failed: Network error - {e}"
-    #     print(status_message)
-    #     results_df = pd.DataFrame(results_log)
-    #     return status_message, results_df
-    # except Exception as e:
-    #     status_message = f"An unexpected error occurred during submission: {e}"
-    #     print(status_message)
-    #     results_df = pd.DataFrame(results_log)
-    #     return status_message, results_df
+    print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
+    try:
+        response = requests.post(submit_url, json=submission_data, timeout=60)
+        response.raise_for_status()
+        result_data = response.json()
+        final_status = (
+            f"Submission Successful!\n"
+            f"User: {result_data.get('username')}\n"
+            f"Overall Score: {result_data.get('score', 'N/A')}% "
+            f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
+            f"Message: {result_data.get('message', 'No message received.')}"
+        )
+        print("Submission successful.")
+        results_df = pd.DataFrame(results_log)
+        return final_status, results_df
+    except requests.exceptions.HTTPError as e:
+        error_detail = f"Server responded with status {e.response.status_code}."
+        try:
+            error_json = e.response.json()
+            error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
+        except requests.exceptions.JSONDecodeError:
+            error_detail += f" Response: {e.response.text[:500]}"
+        status_message = f"Submission Failed: {error_detail}"
+        print(status_message)
+        results_df = pd.DataFrame(results_log)
+        return status_message, results_df
+    except requests.exceptions.Timeout:
+        status_message = "Submission Failed: The request timed out."
+        print(status_message)
+        results_df = pd.DataFrame(results_log)
+        return status_message, results_df
+    except requests.exceptions.RequestException as e:
+        status_message = f"Submission Failed: Network error - {e}"
+        print(status_message)
+        results_df = pd.DataFrame(results_log)
+        return status_message, results_df
+    except Exception as e:
+        status_message = f"An unexpected error occurred during submission: {e}"
+        print(status_message)
+        results_df = pd.DataFrame(results_log)
+        return status_message, results_df
 
 
 # --- Build Gradio Interface using Blocks ---

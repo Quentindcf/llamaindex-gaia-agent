@@ -1,5 +1,7 @@
 gradio
+gradio[oauth]
 requests
 llama-index 
 llama-index-agent-openai 
 openai
+llama-index-tools-wikipedia
