@@ -26,8 +26,8 @@ from llama_index.tools.arxiv.base import ArxivToolSpec
 
 # (Keep Constants as is)
 # --- Constants ---
-DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
-
+DEFAULT_API_URL = "http  s://agents-course-unit4-scoring.hf.space"
+#test
 # --- Basic Agent Definition ---
 class BasicAgent:
     def __init__(self):
