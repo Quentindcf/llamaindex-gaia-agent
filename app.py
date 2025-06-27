@@ -1,4 +1,17 @@
+from dotenv import load_dotenv
 import os
+
+# Load variables from .env file
+load_dotenv()
+
+# Now you can access them like this
+openai_key = os.getenv("OPENAI_API_KEY")
+tavily_key = os.getenv("TAVILY_API_KEY")
+
+# Optional: fail loudly if missing
+if not openai_key or not tavily_key:
+    raise EnvironmentError("Missing OpenAI or Tavily API keys in .env")
+
 import gradio as gr
 import requests
 import re
@@ -7,19 +20,18 @@ import pandas as pd
 from llama_index.core.tools import FunctionTool
 from llama_index.agent.openai import OpenAIAgent
 from llama_index.llms.openai import OpenAI
-from llama_index.tools.wikipedia import WikipediaToolSpec
+from tools import WikipediaToolSpec
+from llama_index.tools.tavily_research import TavilyToolSpec
+from llama_index.tools.arxiv.base import ArxivToolSpec
 
 # (Keep Constants as is)
 # --- Constants ---
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
 # --- Basic Agent Definition ---
-# ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
-OPENAI_API_KEY = "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"
-os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
 class BasicAgent:
     def __init__(self):
-        self.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)  # Or "gpt-4"
+        self.llm = OpenAI(model="o4-mini", temperature=0)  # Or "gpt-4.1"
         self.tools = self.load_tools()
         self.agent = OpenAIAgent.from_tools(
             tools=self.tools,
@@ -30,13 +42,10 @@ class BasicAgent:
         print("Agent initialised")
 
     def load_tools(self):
-        # Sample tool: a basic math function
-        def add_numbers(a: float, b: float) -> float:
-            return a + b
-
-        add_tool = FunctionTool.from_defaults(fn=add_numbers, name="AddNumbers")
-        wikitools = WikipediaToolSpec().to_tool_list()
-        return [add_tool]+wikitools
+        wiki = WikipediaToolSpec().to_tool_list()
+        web = TavilyToolSpec(api_key=tavily_key,).to_tool_list()
+        arxiv = ArxivToolSpec().to_tool_list()
+        return wiki+arxiv
     
     def __call__(self, question: str) -> str:
         print(f"Agent received question (first 50 chars): {question[:50]}...")
@@ -46,6 +55,13 @@ class BasicAgent:
         except Exception as e:
             print(f"Agent error: {e}")
             return f"[Agent Error] {e}"
+        
+def extract_final_answer(output: str) -> str:
+    for line in output.strip().splitlines():
+        if "FINAL ANSWER:" in line:
+            return line.split("FINAL ANSWER:")[-1].strip()
+    return "[Answer not found]"
+
 
 def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
@@ -101,16 +117,16 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
-    for item in questions_data[:2]:
+    questions_answered_correctly = [0,2,16,19]
+    questions_for_deeper_wiki = [4,8,10,12,17]
+    audio_reasoning = [6, 9, 13]
+    computer_vision = [1,3,6]
+    arxiv_search = [7,14,15]
+    maths = [5, 11,18]
+    for item in questions_data:
         task_id = item.get("task_id")
         question_text = item.get("question")
-        general_prompt = '''You are a general AI assistant. 
-                            I will ask you a question. You will answer in this format: [YOUR ANSWER].
-                            You will answer with the following guidelines:
-                            Your answer should be a number OR as few words as possible OR a comma separated list of numbers and/or strings. 
-                            If you are asked for a number, don't use comma to write your number neither use units such as $ or percent sign unless specified otherwise. 
-                            If you are asked for a string, don't use articles, neither abbreviations (e.g. for cities), and write the digits in plain text unless specified otherwise. 
-                            If you are asked for a comma separated list, apply the above rules depending of whether the element to be put in the list is a number or a string.
+        general_prompt = '''You are a general AI assistant. I will ask you a question. Report your thoughts, and finish your answer with the following template: FINAL ANSWER: [YOUR FINAL ANSWER]. YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list of numbers and/or strings. If you are asked for a number, don't use comma to write your number neither use units such as $ or percent sign unless specified otherwise. If you are asked for a string, don't use articles, neither abbreviations (e.g. for cities), and write the digits in plain text unless specified otherwise. If you are asked for a comma separated list, apply the above rules depending of whether the element to be put in the list is a number or a string.
                             This is the question: '''
         final_prompt = general_prompt + question_text
         if not task_id or question_text is None:
@@ -118,9 +134,9 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
             continue
         try:
             submitted_answer = agent(final_prompt)
-            submitted_answer = re.findall(r'\[(.*?)\]', submitted_answer)
-            if len(submitted_answer)==1:
-                submitted_answer = submitted_answer[0]
+            submitted_answer = extract_final_answer(submitted_answer)
+            
+            print(submitted_answer)
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
             results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": submitted_answer})
         except Exception as e:
