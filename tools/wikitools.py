@@ -12,33 +12,53 @@ import regex
 def clean_html_keep_text_and_tables(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-    # Remove images, navs, footers, edit links, etc.
+    if soup.body is None:
+        return "[Error: no <body> tag found in Wikipedia HTML]"
+
+    # Remove non-informative tags
     for tag in soup.find_all(["img", "figure", "audio", "video", "style", "script", "nav", "footer", "aside", "sup", "ol", "ul"]):
-        tag.decompose()
+        try:
+            tag.decompose()
+        except Exception:
+            continue
 
-    # Flatten links to just their text
+    # Flatten links to text
     for a in soup.find_all("a"):
-        a.replace_with(a.get_text())
+        try:
+            a.replace_with(a.get_text())
+        except Exception:
+            continue
 
-    # Remove tables that are purely layout or infoboxes
+    # Remove layout-only or infobox tables
     for table in soup.find_all("table"):
-        if "infobox" in table.get("class", []) or "vertical-navbox" in table.get("class", []):
-            table.decompose()
+        try:
+            classes = table.get("class", [])
+            if not isinstance(classes, list):
+                classes = [classes]  # just in case class is a string
+            if "infobox" in classes or "vertical-navbox" in classes:
+                table.decompose()
+        except Exception:
+            continue
 
-    # Remove headers below "References", "See also", etc.
+    # Remove content after certain headings
     cut_headers = ["References", "External links", "See also", "Further reading", "Navigation menu", "Notes"]
     for header in soup.find_all(["h2", "h3", "h4"]):
-        if header.get_text().strip().strip("[]") in cut_headers:
-            for el in header.find_all_next():
-                el.decompose()
-            header.decompose()
+        try:
+            if header.get_text().strip().strip("[]") in cut_headers:
+                for el in header.find_all_next():
+                    el.decompose()
+                header.decompose()
+        except Exception:
+            continue
 
     return str(soup)
 
 def convert_html_to_text_and_tables(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-    # Markdownify tables, keep the rest as plain text
+    if soup.body is None:
+        return "[Error: no <body> tag found in Wikipedia HTML]"
+    
     output_lines = []
 
     for elem in soup.body.descendants:
@@ -52,13 +72,17 @@ def convert_html_to_text_and_tables(html: str) -> str:
 
     return "\n\n".join(output_lines)
 
-def get_markdown_doc_content(page) -> str | None:
-    response = requests.get(page.url, headers={"User-Agent": "WikipediaMarkdownBot/1.0"})
-    if response.status_code!=200:
-        return None
-    html = clean_html_keep_text_and_tables(response.text)
-    clean_text = convert_html_to_text_and_tables(html)
-    return Document(text=clean_text, metadata={"source": "wikipedia", "title": page.title})
+def get_markdown_doc_content(page) -> str:
+    try:
+        response = requests.get(page.url, headers={"User-Agent": "WikipediaMarkdownBot/1.0"})
+        if response.status_code != 200:
+            return f"Couldn't fetch Wikipedia page {page.url}"
+
+        html = clean_html_keep_text_and_tables(response.text)
+        clean_text = convert_html_to_text_and_tables(html)
+        return clean_text
+    except Exception as e:
+        return f"[Wikipedia content error: {e}]"
 
 
 class WikipediaToolSpec(BaseToolSpec):
@@ -85,8 +109,10 @@ class WikipediaToolSpec(BaseToolSpec):
             wikipedia_page = wikipedia.page(page, **load_kwargs, auto_suggest=False)
         except wikipedia.PageError:
             wikipedia_page = self.search_data(page, lang)
-            return "Unable to load page. This was the closest:"+get_markdown_doc_content(wikipedia_page).text
-        return get_markdown_doc_content(wikipedia_page).text
+            if wikipedia_page == "No search results.":
+                return "No search results."
+            return "Unable to load page. This was the closest:"+get_markdown_doc_content(wikipedia_page)
+        return get_markdown_doc_content(wikipedia_page)
 
     def search_data(self, query: str, lang: str = "en") -> str:
         """

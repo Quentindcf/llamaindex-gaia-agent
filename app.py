@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 import os
-
+import asyncio
 # Load variables from .env file
 load_dotenv()
 
@@ -23,35 +23,91 @@ from llama_index.llms.openai import OpenAI
 from tools import WikipediaToolSpec
 from llama_index.tools.tavily_research import TavilyToolSpec
 from llama_index.tools.arxiv.base import ArxivToolSpec
+from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent
+
 
 # (Keep Constants as is)
 # --- Constants ---
-DEFAULT_API_URL = "http  s://agents-course-unit4-scoring.hf.space"
+DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 #test commit 2
 # --- Basic Agent Definition ---
 class BasicAgent:
     def __init__(self):
-        self.llm = OpenAI(model="o4-mini", temperature=0)  # Or "gpt-4.1"
-        self.tools = self.load_tools()
-        self.agent = OpenAIAgent.from_tools(
-            tools=self.tools,
-            llm=self.llm,
-            verbose=True,
-            max_function_calls=1
-        )
-        print("Agent initialised")
+        self.llm = OpenAI(model="gpt-4.1", temperature=0)  # Or "gpt-4.1"
+        
+        self.wiki = WikipediaToolSpec().to_tool_list()
+        self.web = TavilyToolSpec(api_key=tavily_key).to_tool_list()
+        self.arxiv = ArxivToolSpec().to_tool_list()
 
-    def load_tools(self):
-        wiki = WikipediaToolSpec().to_tool_list()
-        web = TavilyToolSpec(api_key=tavily_key,).to_tool_list()
-        arxiv = ArxivToolSpec().to_tool_list()
-        return wiki+arxiv
-    
+    def reset_agents(self):
+        self.controller_agent = FunctionAgent(
+                            name="ControllerAgent",
+                            description="Receives the user question and decides whether to use Wikipedia, Arxiv, or Web Search.",
+                            system_prompt="""
+                        You are a controller agent. You must select one agent to handle the user's question.
+
+                        Think carefully about the nature of the question:
+                        - If it's about general knowledge or facts, route to WikipediaAgent.
+                        - If it's about academic topics or scientific methods, route to ArxivAgent.
+                        - If it asks about current events or the latest info, route to WebSearchAgent.
+
+                        NEVER answer the question yourself. Only delegate to one of the agents in your `can_handoff_to` list.
+                        """,
+                            llm=self.llm,
+                            tools=[],  # Controller doesn't call any tools
+                            can_handoff_to=["WikipediaAgent", "ArxivAgent", "WebSearchAgent"],
+                            )
+
+        self.wiki_agent = FunctionAgent(
+                            name="WikipediaAgent",
+                            description="Useful for general facts, concepts, biographies, and locations.",
+                            system_prompt="You are a Wikipedia expert. Answer factual questions from Wikipedia only.",
+                            llm=self.llm,
+                            tools=self.wiki,
+                            can_handoff_to=["ArxivAgent", "WebSearchAgent"]
+                            )
+        self.arxiv_agent = FunctionAgent(
+                                name="ArxivAgent",
+                                description="Useful for answering academic or scientific questions.",
+                                system_prompt="You are a scientific researcher. Use Arxiv to look up academic answers.",
+                                llm=self.llm,
+                                tools=self.arxiv,
+                                can_handoff_to=["WikipediaAgent", "WebSearchAgent"]
+                                )
+        self.web_agent = FunctionAgent(
+                            name="WebSearchAgent",
+                            description="Useful for answering questions about current events or live information.",
+                            system_prompt="You are a web researcher. Use live search to get current facts or updates.",
+                            llm=self.llm,
+                            tools=self.web,
+                            can_handoff_to=["WikipediaAgent", "ArxivAgent"]
+                            )
+        self.workflow = AgentWorkflow(
+                            agents=[self.controller_agent, self.wiki_agent, self.arxiv_agent, self.web_agent],
+                            root_agent=self.controller_agent.name,
+                            initial_state={"user_question": ""},
+                            verbose=True
+                            )
+
     def __call__(self, question: str) -> str:
-        print(f"Agent received question (first 50 chars): {question[:50]}...")
+        self.reset_agents()
+
+        async def run_workflow():
+            return await self.workflow.run(user_msg=question)
+
         try:
-            response = self.agent.chat(question)
-            return str(response)
+            try:
+                loop = asyncio.get_running_loop()
+                # Already in an event loop (e.g., Gradio), must not block!
+                # Launch the coroutine and return its result via a task
+                future = asyncio.ensure_future(run_workflow())
+                return asyncio.get_event_loop().run_until_complete(future)
+            except RuntimeError:
+                # No event loop is running, create and run one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(run_workflow())
+
         except Exception as e:
             print(f"Agent error: {e}")
             return f"[Agent Error] {e}"
@@ -117,13 +173,15 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
-    questions_answered_correctly = [0,2,16,19]
-    questions_for_deeper_wiki = [4,8,10,12,17]
+    questions_answered_correctly = [0,2,4,7,15,16,17,19]
+    questions_for_deeper_wiki = [8,10,12]
     audio_reasoning = [6, 9, 13]
     computer_vision = [1,3,6]
-    arxiv_search = [7,14,15]
+    arxiv_search = [14]
     maths = [5, 11,18]
-    for item in questions_data:
+    test= []
+    for ii in questions_answered_correctly:
+        item = questions_data[ii]
         task_id = item.get("task_id")
         question_text = item.get("question")
         general_prompt = '''You are a general AI assistant. I will ask you a question. Report your thoughts, and finish your answer with the following template: FINAL ANSWER: [YOUR FINAL ANSWER]. YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list of numbers and/or strings. If you are asked for a number, don't use comma to write your number neither use units such as $ or percent sign unless specified otherwise. If you are asked for a string, don't use articles, neither abbreviations (e.g. for cities), and write the digits in plain text unless specified otherwise. If you are asked for a comma separated list, apply the above rules depending of whether the element to be put in the list is a number or a string.
@@ -133,8 +191,9 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
             print(f"Skipping item with missing task_id or question: {item}")
             continue
         try:
-            submitted_answer = agent(final_prompt)
-            submitted_answer = extract_final_answer(submitted_answer)
+            result = agent(final_prompt)
+            output = result.response.content if hasattr(result, "response") else str(result)
+            submitted_answer = extract_final_answer(output)
             
             print(submitted_answer)
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
