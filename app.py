@@ -24,6 +24,8 @@ from tools import WikipediaToolSpec
 from llama_index.tools.tavily_research import TavilyToolSpec
 from llama_index.tools.arxiv.base import ArxivToolSpec
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent
+from llama_index.readers.whisper import WhisperReader
+from youtube_transcript_api import YouTubeTranscriptApi
 
 
 # (Keep Constants as is)
@@ -34,10 +36,43 @@ DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 class BasicAgent:
     def __init__(self):
         self.llm = OpenAI(model="gpt-4.1", temperature=0)  # Or "gpt-4.1"
+
+        whisper_reader = WhisperReader(model="whisper-1")
+
+        def transcribe_audio_tool(file_path: str) -> str:
+            """
+            Use this to transcribe audio files (mp3, wav, etc.)
+            Args:
+            file_path (str): local path of the file to transcribe
+            """
+            docs = whisper_reader.load_data(file_path)
+            return docs[0].text if docs else "[No transcription found]"
         
+        def transcribe_youtube(url: str) -> str:
+            """Fetch and return transcript from a YouTube video."""
+            try:
+                video_id = url.split("v=")[-1].split("&")[0]
+                transcript = YouTubeTranscriptApi.get_transcript(video_id)
+                text = " ".join([entry["text"] for entry in transcript])
+                return text
+            except Exception as e:
+                return f"[YouTube Transcript Error] {str(e)}"
+        
+        self.whisper_tool = FunctionTool.from_defaults(
+            fn=transcribe_audio_tool,
+            name="WhisperTranscription",
+            description="""Use this to transcribe audio files (mp3, wav, etc.)
+            Args:
+            file_path (str): local path of the file to transcribe
+            """
+            )
+        
+        self.youtube_tool = FunctionTool.from_defaults(fn=transcribe_youtube, name="TranscribeYouTube")
+
         self.wiki = WikipediaToolSpec().to_tool_list()
         self.web = TavilyToolSpec(api_key=tavily_key).to_tool_list()
         self.arxiv = ArxivToolSpec().to_tool_list()
+        
 
     def reset_agents(self):
         self.controller_agent = FunctionAgent(
@@ -50,14 +85,46 @@ class BasicAgent:
                         - If it's about general knowledge or facts, route to WikipediaAgent.
                         - If it's about academic topics or scientific methods, route to ArxivAgent.
                         - If it asks about current events or the latest info, route to WebSearchAgent.
+                        - If it asks about an audio transcript or file, or if the state contains a .mp3, .wav or .m4a file route to AudioAgent.
 
                         NEVER answer the question yourself. Only delegate to one of the agents in your `can_handoff_to` list.
                         """,
                             llm=self.llm,
-                            tools=[],  # Controller doesn't call any tools
-                            can_handoff_to=["WikipediaAgent", "ArxivAgent", "WebSearchAgent"],
+                            tools=[],  
+                            # verbose=True,
+                            can_handoff_to=["WikipediaAgent", "ArxivAgent", "WebSearchAgent", "AudioAgent"],
                             )
+        
+        self.audio_agent = FunctionAgent(
+                            name="AudioAgent",
+                            description="Useful extracting transcripts from audio files and answering questions about them",
+                            system_prompt= """
+                                    You are an expert AI assistant for audio-based tasks. Your job is to listen to an audio file, transcribe it accurately, and extract information that answers the user's question.
 
+                                    INSTRUCTIONS:
+                                    1. First, transcribe the audio clearly and completely.
+                                    2. Then, carefully read the user's question or instructions to understand what specific information they are asking for.
+                                    3. Extract only the relevant information from the transcript.
+                                    4. Format the answer **exactly** as instructed. Follow formatting rules strictly — e.g., if asked for a comma-separated list, do not include explanations or extra text.
+                                    5. If the user asks to ignore certain content (e.g., "only ingredients for the filling"), do so carefully and precisely.
+                                    6. If the task requires sorting, filtering, or converting values (like ignoring quantities or alphabetizing items), do it before producing your final output.
+                                    7. Finish your response with the format:  
+                                    `FINAL ANSWER: [your answer]`
+
+                                    Examples of tasks you may receive:
+                                    - Extracting ingredients or actions from a recipe.
+                                    - Identifying page numbers from a spoken reading list.
+                                    - Summarizing a voicemail message.
+                                    - Listing named entities mentioned in the audio.
+
+                                    Be precise, concise, and follow the user's instructions exactly.
+                                    """,
+                            llm=self.llm,
+                            tools=[self.whisper_tool, self.youtube_tool],
+                            # verbose=True,
+                            can_handoff_to=["WikipediaAgent","ArxivAgent", "WebSearchAgent"]
+                            )
+        
         self.wiki_agent = FunctionAgent(
                             name="WikipediaAgent",
                             description="Useful for general facts, concepts, biographies, and locations.",
@@ -82,18 +149,32 @@ class BasicAgent:
                             tools=self.web,
                             can_handoff_to=["WikipediaAgent", "ArxivAgent"]
                             )
+
+
+    def __call__(self, question :str, file_path: str = "") -> str:
+        self.reset_agents()
         self.workflow = AgentWorkflow(
-                            agents=[self.controller_agent, self.wiki_agent, self.arxiv_agent, self.web_agent],
+                            agents=[self.controller_agent, self.wiki_agent, self.arxiv_agent, self.web_agent, self.audio_agent],
                             root_agent=self.controller_agent.name,
-                            initial_state={"user_question": ""},
+                            initial_state={
+                                "file_path": file_path,
+                                "question": question,
+                            },
                             verbose=True
                             )
-
-    def __call__(self, question: str) -> str:
-        self.reset_agents()
-
         async def run_workflow():
             return await self.workflow.run(user_msg=question)
+        
+        # async def run_with_printouts():
+        #     handler = self.workflow.run(user_msg=question)
+        #     async for event in handler.stream_events():
+        #         print("\n===== EVENT =====")
+        #         print(repr(event))  # full structured representation
+        #         print("=================\n")
+        #     return handler
+        
+        # async def run_workflow():
+        #     return await run_with_printouts()
 
         try:
             try:
@@ -116,7 +197,24 @@ def extract_final_answer(output: str) -> str:
     for line in output.strip().splitlines():
         if "FINAL ANSWER:" in line:
             return line.split("FINAL ANSWER:")[-1].strip()
-    return "[Answer not found]"
+    return "[Answer not found] This was the output: "+output
+
+
+def download_attachment(file_name: str, save_dir: str = "./downloads") -> str:
+    os.makedirs(save_dir, exist_ok=True)
+
+    file_id = os.path.splitext(file_name)[0]  # removes .mp3, .pdf, etc.
+    url = f"{DEFAULT_API_URL}/files/{file_id}"
+    save_path = os.path.join(save_dir, file_name)
+
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        with open(save_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return save_path
+    else:
+        raise Exception(f"Failed to download {file_name}: {response.status_code}")
 
 
 def run_and_submit_all( profile: gr.OAuthProfile | None):
@@ -173,17 +271,23 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
-    questions_answered_correctly = [0,2,4,7,15,16,17,19]
+    questions_answered_correctly = [0,2,4,7,9, 13, 15,16,17,19]
     questions_for_deeper_wiki = [8,10,12]
-    audio_reasoning = [6, 9, 13]
+    audio_reasoning =  []
     computer_vision = [1,3,6]
     arxiv_search = [14]
     maths = [5, 11,18]
-    test= []
-    for ii in questions_answered_correctly:
+    test= [6]
+    for ii in test:
         item = questions_data[ii]
         task_id = item.get("task_id")
         question_text = item.get("question")
+        file_name = item.get("file_name")
+        local_path = ""
+        if file_name:
+            local_path = download_attachment(file_name)
+            print(f"File saved to {local_path}")
+
         general_prompt = '''You are a general AI assistant. I will ask you a question. Report your thoughts, and finish your answer with the following template: FINAL ANSWER: [YOUR FINAL ANSWER]. YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list of numbers and/or strings. If you are asked for a number, don't use comma to write your number neither use units such as $ or percent sign unless specified otherwise. If you are asked for a string, don't use articles, neither abbreviations (e.g. for cities), and write the digits in plain text unless specified otherwise. If you are asked for a comma separated list, apply the above rules depending of whether the element to be put in the list is a number or a string.
                             This is the question: '''
         final_prompt = general_prompt + question_text
@@ -191,7 +295,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
             print(f"Skipping item with missing task_id or question: {item}")
             continue
         try:
-            result = agent(final_prompt)
+            result = agent(final_prompt, file_path=local_path)
             output = result.response.content if hasattr(result, "response") else str(result)
             submitted_answer = extract_final_answer(output)
             
