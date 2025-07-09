@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import os
+import cv2
 import asyncio
 # Load variables from .env file
 load_dotenv()
@@ -20,12 +21,15 @@ import pandas as pd
 from llama_index.core.tools import FunctionTool
 from llama_index.agent.openai import OpenAIAgent
 from llama_index.llms.openai import OpenAI
+from llama_index.multi_modal_llms.openai import OpenAIMultiModal
 from tools import WikipediaToolSpec
 from llama_index.tools.tavily_research import TavilyToolSpec
 from llama_index.tools.arxiv.base import ArxivToolSpec
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent
 from llama_index.readers.whisper import WhisperReader
 from youtube_transcript_api import YouTubeTranscriptApi
+from pytube import YouTube
+import tempfile
 
 
 # (Keep Constants as is)
@@ -35,7 +39,8 @@ DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 # --- Basic Agent Definition ---
 class BasicAgent:
     def __init__(self):
-        self.llm = OpenAI(model="gpt-4.1", temperature=0)  # Or "gpt-4.1"
+        self.llm = OpenAI(model="gpt-4.1", temperature=0) 
+        self.multilodal_llm = OpenAI(model="gpt-4.1", temperature=0) 
 
         whisper_reader = WhisperReader(model="whisper-1")
 
@@ -57,6 +62,46 @@ class BasicAgent:
                 return text
             except Exception as e:
                 return f"[YouTube Transcript Error] {str(e)}"
+            
+        def download_youtube_video(url: str) -> str:
+            yt = YouTube(url)
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').first()
+            temp_dir = tempfile.mkdtemp()
+            filepath = stream.download(output_path=temp_dir)
+            return filepath
+        
+
+        def extract_video_frames(path, output_dir="frames", fps=0.2):
+            """
+            Extract frames from a video at the specified FPS (e.g., 0.2 = one frame every 5 seconds).
+            Saves frames to disk and returns list of file paths.
+            """
+            os.makedirs(output_dir, exist_ok=True)
+            cap = cv2.VideoCapture(path)
+            
+            if not cap.isOpened():
+                raise ValueError(f"Failed to open video file: {path}")
+
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            interval = int(video_fps / fps) if video_fps > 0 else int(1 / fps)
+            count = 0
+            saved_frames = 0
+            frames = []
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if count % interval == 0:
+                    frame_path = os.path.join(output_dir, f"frame_{saved_frames}.jpg")
+                    cv2.imwrite(frame_path, frame)
+                    frames.append(frame_path)
+                    saved_frames += 1
+                count += 1
+
+            cap.release()
+            return frames
+
         
         self.whisper_tool = FunctionTool.from_defaults(
             fn=transcribe_audio_tool,
@@ -67,7 +112,27 @@ class BasicAgent:
             """
             )
         
-        self.youtube_tool = FunctionTool.from_defaults(fn=transcribe_youtube, name="TranscribeYouTube")
+        self.youtube_download_tool = FunctionTool.from_defaults(
+            fn=download_youtube_video,
+            name="YoutubeDownload",
+            description="""Use this to download a video from youtube
+            Args:
+            URL (str): url to the youtube video
+            """
+            )
+        
+        self.frame_extraction_tool = FunctionTool.from_defaults(
+            fn=extract_video_frames,
+            name="FrameExtract",
+            description="""Use this to extract frames from a video file
+            Args:
+            path (str): local path
+            output_dir (str): output directory for the extracted frames. Default is "frames", keep default
+            fps (float): target fps. Default is 0.2, but can be adapted to size of the video.
+            """
+            )
+        
+        self.youtube_audio_tool = FunctionTool.from_defaults(fn=transcribe_youtube, name="TranscribeYouTube")
 
         self.wiki = WikipediaToolSpec().to_tool_list()
         self.web = TavilyToolSpec(api_key=tavily_key).to_tool_list()
@@ -86,14 +151,24 @@ class BasicAgent:
                         - If it's about academic topics or scientific methods, route to ArxivAgent.
                         - If it asks about current events or the latest info, route to WebSearchAgent.
                         - If it asks about an audio transcript or file, or if the state contains a .mp3, .wav or .m4a file route to AudioAgent.
+                        - If it asks about an image or a video route to ComputerVisionAgent.
 
                         NEVER answer the question yourself. Only delegate to one of the agents in your `can_handoff_to` list.
                         """,
                             llm=self.llm,
                             tools=[],  
                             # verbose=True,
-                            can_handoff_to=["WikipediaAgent", "ArxivAgent", "WebSearchAgent", "AudioAgent"],
+                            can_handoff_to=["WikipediaAgent", "ArxivAgent", "WebSearchAgent", "AudioAgent", "ComputerVisionAgent"],
                             )
+        
+        self.vision_agent = FunctionAgent(
+                            name="ComputerVisionAgent",
+                            description="Analyzes images or videos from YouTube or local files.",
+                            system_prompt="""You are an expert in computer vision. If given a video or image, extract meaningful visual insights (e.g., counting objects, identifying species, reading text, etc.).""",
+                            llm=self.multilodal_llm,  # likely GPT-4.1
+                            tools=[self.youtube_download_tool, self.frame_extraction_tool],
+                            can_handoff_to=["ControllerAgent"]
+                        )
         
         self.audio_agent = FunctionAgent(
                             name="AudioAgent",
@@ -120,7 +195,7 @@ class BasicAgent:
                                     Be precise, concise, and follow the user's instructions exactly.
                                     """,
                             llm=self.llm,
-                            tools=[self.whisper_tool, self.youtube_tool],
+                            tools=[self.whisper_tool, self.youtube_audio_tool],
                             # verbose=True,
                             can_handoff_to=["WikipediaAgent","ArxivAgent", "WebSearchAgent"]
                             )
@@ -154,7 +229,7 @@ class BasicAgent:
     def __call__(self, question :str, file_path: str = "") -> str:
         self.reset_agents()
         self.workflow = AgentWorkflow(
-                            agents=[self.controller_agent, self.wiki_agent, self.arxiv_agent, self.web_agent, self.audio_agent],
+                            agents=[self.controller_agent, self.wiki_agent, self.arxiv_agent, self.web_agent, self.audio_agent, self.vision_agent],
                             root_agent=self.controller_agent.name,
                             initial_state={
                                 "file_path": file_path,
@@ -277,11 +352,12 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     computer_vision = [1,3,6]
     arxiv_search = [14]
     maths = [5, 11,18]
-    test= [6]
+    test= [1]
     for ii in test:
         item = questions_data[ii]
         task_id = item.get("task_id")
         question_text = item.get("question")
+        print(question_text)
         file_name = item.get("file_name")
         local_path = ""
         if file_name:
