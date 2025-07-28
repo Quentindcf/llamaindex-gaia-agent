@@ -262,19 +262,19 @@ class BasicAgent:
                             verbose=True
                             )
         
-        # async def run_workflow():
-        #     return await self.workflow.run(user_msg=question)
-        
-        async def run_with_printouts():
-            handler = self.workflow.run(user_msg=question)
-            async for event in handler.stream_events():
-                print("\n===== EVENT =====")
-                print(repr(event))
-                print("=================\n")
-            return await handler  
-
         async def run_workflow():
-            return await run_with_printouts()
+            return await self.workflow.run(user_msg=question)
+        
+        # async def run_with_printouts():
+        #     handler = self.workflow.run(user_msg=question)
+        #     async for event in handler.stream_events():
+        #         print("\n===== EVENT =====")
+        #         print(repr(event))
+        #         print("=================\n")
+        #     return await handler  
+
+        # async def run_workflow():
+        #     return await run_with_printouts()
 
 
         try:
@@ -398,14 +398,14 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
-    questions_answered_correctly = [0,2,4,7,9, 13, 15,16,17,19]
+    questions_answered_correctly = [0,1,2,4,6,7,9, 13, 15,16,17,19]
     questions_for_deeper_wiki = [8,10,12]
     audio_reasoning =  []
-    computer_vision = [1,3,6]
+    computer_vision = [3]
     arxiv_search = [14]
     maths = [5, 11,18]
     test= [1]
-    for ii in test:
+    for ii in range(len(questions_data)):
         item = questions_data[ii]
         task_id = item.get("task_id")
         question_text = item.get("question")
