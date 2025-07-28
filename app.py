@@ -28,7 +28,7 @@ from llama_index.tools.arxiv.base import ArxivToolSpec
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent
 from llama_index.readers.whisper import WhisperReader
 from youtube_transcript_api import YouTubeTranscriptApi
-from pytube import YouTube
+import yt_dlp
 import tempfile
 
 
@@ -63,17 +63,27 @@ class BasicAgent:
             except Exception as e:
                 return f"[YouTube Transcript Error] {str(e)}"
             
+        
         def download_youtube_video(url: str) -> str:
-            yt = YouTube(url)
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').first()
             temp_dir = tempfile.mkdtemp()
-            filepath = stream.download(output_path=temp_dir)
+            filepath = os.path.join(temp_dir, 'video.mp4')
+
+            ydl_opts = {
+                'outtmpl': filepath,
+                'format': 'mp4/best',
+                'quiet': True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
             return filepath
         
 
-        def extract_video_frames(path, output_dir="frames", fps=0.2):
+        def extract_video_frames(path, output_dir="frames", fps=0.5):
             """
-            Extract frames from a video at the specified FPS (e.g., 0.2 = one frame every 5 seconds).
+            Extract frames from a video at the specified FPS (e.g., 0.5 = one frame every 2 seconds).
+            Default of fps=0.5 is good. Only reduce FPS when .5 would generate too many frames
             Saves frames to disk and returns list of file paths.
             """
             os.makedirs(output_dir, exist_ok=True)
@@ -164,7 +174,21 @@ class BasicAgent:
         self.vision_agent = FunctionAgent(
                             name="ComputerVisionAgent",
                             description="Analyzes images or videos from YouTube or local files.",
-                            system_prompt="""You are an expert in computer vision. If given a video or image, extract meaningful visual insights (e.g., counting objects, identifying species, reading text, etc.).""",
+                            system_prompt="""You are a visual reasoning agent. You analyze images and videos and extract structured information or answers based on the user's question.
+
+                                        INSTRUCTIONS:
+                                        - You will receive either image frames or stills from a video.
+                                        - Use visual understanding to answer the user's question as accurately and concisely as possible.
+                                        - Focus only on what is visible in the frames provided — do not speculate beyond what you see.
+                                        - If there are multiple frames, consider all of them when forming your answer.
+
+                                        FORMATTING:
+                                        - Always include a clearly marked final answer, like this:
+                                        FINAL ANSWER: [your answer here]
+
+                                        - The final answer must be as short and specific as possible — usually a number, a string, or a comma-separated list.
+                                        - Do not describe what you are about to do. Output the final result only.
+                                            """,
                             llm=self.multilodal_llm,  # likely GPT-4.1
                             tools=[self.youtube_download_tool, self.frame_extraction_tool],
                             can_handoff_to=["ControllerAgent"]
@@ -237,19 +261,21 @@ class BasicAgent:
                             },
                             verbose=True
                             )
-        async def run_workflow():
-            return await self.workflow.run(user_msg=question)
-        
-        # async def run_with_printouts():
-        #     handler = self.workflow.run(user_msg=question)
-        #     async for event in handler.stream_events():
-        #         print("\n===== EVENT =====")
-        #         print(repr(event))  # full structured representation
-        #         print("=================\n")
-        #     return handler
         
         # async def run_workflow():
-        #     return await run_with_printouts()
+        #     return await self.workflow.run(user_msg=question)
+        
+        async def run_with_printouts():
+            handler = self.workflow.run(user_msg=question)
+            async for event in handler.stream_events():
+                print("\n===== EVENT =====")
+                print(repr(event))
+                print("=================\n")
+            return await handler  
+
+        async def run_workflow():
+            return await run_with_printouts()
+
 
         try:
             try:
@@ -268,11 +294,37 @@ class BasicAgent:
             print(f"Agent error: {e}")
             return f"[Agent Error] {e}"
         
-def extract_final_answer(output: str) -> str:
-    for line in output.strip().splitlines():
-        if "FINAL ANSWER:" in line:
-            return line.split("FINAL ANSWER:")[-1].strip()
-    return "[Answer not found] This was the output: "+output
+def extract_text_output(result) -> str:
+    try:
+        
+        # Case 1: to raw text content (for simpler models)
+        if hasattr(result, "response") and hasattr(result.response, "content"):
+            for line in result.response.content.strip().splitlines():
+                if "FINAL ANSWER:" in line:
+                    return line.split("FINAL ANSWER:")[-1].strip()
+                
+        # Case 2: If response has blocks (multimodal models)
+        print(result)
+        if hasattr(result, "response") :
+            print(result.response)
+            if hasattr(result.response, "blocks"):
+                print(result.response.blocks)
+                for block in result.response.blocks:
+                    if block.block_type == "text" and "FINAL ANSWER:" in block.text:
+                        return block.text.split("FINAL ANSWER:")[-1].strip()
+
+
+    except Exception as e:
+        print(f"[Answer extraction error] {e}")
+
+    return "[Answer not found]"
+
+        
+# def extract_final_answer(output: str) -> str:
+#     for line in output.strip().splitlines():
+#         if "FINAL ANSWER:" in line:
+#             return line.split("FINAL ANSWER:")[-1].strip()
+#     return "[Answer not found] This was the output: "+output
 
 
 def download_attachment(file_name: str, save_dir: str = "./downloads") -> str:
@@ -372,8 +424,9 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
             continue
         try:
             result = agent(final_prompt, file_path=local_path)
-            output = result.response.content if hasattr(result, "response") else str(result)
-            submitted_answer = extract_final_answer(output)
+            print(result)
+            submitted_answer = extract_text_output(result)
+             
             
             print(submitted_answer)
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
