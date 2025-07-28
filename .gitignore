@@ -2,3 +2,5 @@
 .env
 frames/*
 downloads/*
+
+!frames/.gitkeep
