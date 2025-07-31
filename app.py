@@ -5,9 +5,15 @@ import sys
 import gradio as gr
 import requests
 import pandas as pd
+from dotenv import load_dotenv
 from agents.llamaindex_agent import BasicAgent
 print("PYTHONPATH:", sys.path)
 
+# Load variables from .env file
+load_dotenv()
+
+openai_key = os.getenv("OPENAI_API_KEY")
+tavily_key = os.getenv("TAVILY_API_KEY")
 
 # (Keep Constants as is)
 # --- Constants ---
@@ -90,7 +96,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
 
     # 1. Instantiate Agent ( modify this part to create your agent)
     try:
-        agent = BasicAgent()
+        agent = BasicAgent(tavily_key=tavily_key)
     except Exception as e:
         print(f"Error instantiating agent: {e}")
         return f"Error initializing agent: {e}", None

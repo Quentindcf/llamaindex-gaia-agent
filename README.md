@@ -1,6 +1,6 @@
 ---
-title: Template Final Assignment
-emoji: 🕵🏻‍♂️
+title: GAIA Agent – Final Assignment
+emoji: 🧠
 colorFrom: indigo
 colorTo: indigo
 sdk: gradio
@@ -8,82 +8,81 @@ sdk_version: 5.25.2
 app_file: app.py
 pinned: false
 hf_oauth: true
-# optional, default duration is 8 hours/480 minutes. Max duration is 30 days/43200 minutes.
 hf_oauth_expiration_minutes: 480
 ---
 
 # 🧠 GAIA Agent — Level 1 Benchmark
 
-A modular agent built with [LlamaIndex](https://llamaindex.ai) to tackle the first level of the [GAIA Benchmark](https://github.com/GAIA-benchmark/GAIA).
+A modular multimodal agent built with [LlamaIndex](https://llamaindex.ai), designed to tackle Level 1 of the [GAIA Benchmark](https://github.com/GAIA-benchmark/GAIA).
 
 ## 🎯 Goal
 
-Achieve at least **30% accuracy** on GAIA Level 1 using an autonomous agent that can:
-- Parse and reason about multimodal inputs (images, audio, video)
-- Use external tools (transcription, captioning, web search)
-- Chain reasoning steps together using a Planner–Executor architecture
+Achieve at least **30% accuracy** on GAIA Level 1 using an autonomous FunctionAgent–based architecture that can:
+- Parse and reason over multimodal inputs (images, video, audio, text)
+- Use specialized tools (transcription, video analysis, Wikipedia, Arxiv, web search)
+- Delegate tasks between agents in a planner–executor system
 
-## ⚙️ Frameworks
+## ⚙️ Frameworks & Dependencies
 
-- LlamaIndex
-- OpenAI / Mistral / Anthropic (LLM backend)
-- Whisper / BLIP / web search tools
+- [LlamaIndex](https://llamaindex.ai)
+- OpenAI (GPT-4.1)
+- Whisper (via LlamaIndex)
+- Tavily API for live web search
+- yt-dlp, OpenCV for YouTube video handling
+- Gradio (for Hugging Face UI)
 
 ## 🧰 Features
 
-- Modular tool system (plug-and-play)
-- Logging for each agent run
-- Agent memory / scratchpad
-- Evaluator for automatic scoring
+- 🔌 Modular tool system (plug-and-play)
+- 🪄 Controller agent to route questions to the right expert
+- 🔊 Audio transcription (file or YouTube)
+- 🎥 YouTube video download and frame extraction
+- 🌐 Web search + Wikipedia + Arxiv lookup
+- ✅ Built-in logic to return concise `FINAL ANSWER`
 
 ## 🚀 Getting Started
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/gaia-agent.git
-cd gaia-agent
+git clone https://github.com/YOUR_USERNAME/llamaindex-gaia-agent.git
+cd llamaindex-gaia-agent
 
 # 2. Set up environment
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 
-# 3. Run agent on a sample question
-python run_agent.py --question_id q_0001
+# 3. Add your environment variables
+cp .env.example .env
+# Edit .env to add your OpenAI and Tavily API keys
+
+# 4. Run the agent (sample)
+python app/main.py
 ```
 
-## 📂 Repo Structure
+## 📂 Folder Structure
+
+llamaindex-gaia-agent/
+├── agent/                 # Core agent logic and controller
+├── tools/                 # Video, audio, and search tools
+├── data/                  # Sample inputs and outputs
+├── app/                   # Gradio or CLI interface
+├── .env.example           # Example environment variables
+├── main.py                # Entrypoint (or app.py for Spaces)
+├── requirements.txt
+└── README.md
+
+## 🧪 .env Configuration
+
+Create a .env file with your credentials:
+
 ```
-gaia-agent/
-├── tools/              # Tool wrappers (e.g. whisper.py, blip.py)
-├── agent/              # Agent logic
-├── data/               # GAIA samples and outputs
-├── run_agent.py        # CLI entrypoint
-├── eval/               # Scoring logic
-├── README.md
-└── requirements.txt
+OPENAI_API_KEY=sk-...
+TAVILY_API_KEY=tvly_...
 ```
+
+These are loaded automatically by the agent.
 
 ## 📜 License
 
 MIT
-
-## 🧱 Environment Setup
-
-### `requirements.txt` (initial draft)
-
-```txt
-llama-index>=0.10.40
-openai
-tavily-search  # optional for web search
-transformers
-torch
-accelerate
-Pillow
-whisper
-opencv-python
-python-dotenv
-```
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
-

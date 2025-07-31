@@ -1,114 +1,41 @@
 ''' the main agent class '''
 
 import os
-import tempfile
 import asyncio
-from typing import List
-from dotenv import load_dotenv
+
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
 from llama_index.tools.tavily_research import TavilyToolSpec
 from llama_index.tools.arxiv.base import ArxivToolSpec
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent
-from llama_index.readers.whisper import WhisperReader
-from youtube_transcript_api import YouTubeTranscriptApi
-import yt_dlp
-import cv2
 from tools import WikipediaToolSpec
+from tools import video_tools as vid
+from tools import audio_tool as audio
 
-
-# Load variables from .env file
-load_dotenv()
-
-# Now you can access them like this
-openai_key = os.getenv("OPENAI_API_KEY")
-tavily_key = os.getenv("TAVILY_API_KEY")
 
 
 class BasicAgent:
     """
-    An AI Agent built with LlamaIndex that routes queries to Wikipedia, Arxiv, Web Search,
-    Audio transcription, or Video analysis using a controller-agent architecture.
+    An AI Agent using LlamaIndex tools and OpenAI for multimodal reasoning.
+
+    It dynamically routes queries to specialized agents:
+    - WikipediaAgent: general knowledge
+    - ArxivAgent: academic sources
+    - WebSearchAgent: current events
+    - AudioAgent: audio file transcription and processing
+    - ComputerVisionAgent: YouTube and video frame analysis
     """
 
-    def __init__(self):
+
+    def __init__(self, tavily_key=None):
         self.llm = OpenAI(model="gpt-4.1", temperature=0)
-        self.multilodal_llm = OpenAI(model="gpt-4.1", temperature=0)
-
-        whisper_reader = WhisperReader(model="whisper-1")
-
-        def transcribe_audio_tool(file_path: str) -> str:
-            """
-            Use this to transcribe audio files (mp3, wav, etc.)
-            Args:
-            file_path (str): local path of the file to transcribe
-            """
-            docs = whisper_reader.load_data(file_path)
-            return docs[0].text if docs else "[No transcription found]"
-
-        def transcribe_youtube(url: str) -> str:
-            """Fetch and return transcript from a YouTube video."""
-            try:
-                video_id = url.split("v=")[-1].split("&")[0]
-                transcript = YouTubeTranscriptApi.get_transcript(video_id)
-                text = " ".join([entry["text"] for entry in transcript])
-                return text
-            except Exception as e:
-                return f"[YouTube Transcript Error] {str(e)}"
+        self.multimodal_llm = OpenAI(model="gpt-4.1", temperature=0)
 
 
-        def download_youtube_video(url: str) -> str:
-            temp_dir = tempfile.mkdtemp()
-            filepath = os.path.join(temp_dir, 'video.mp4')
-
-            ydl_opts = {
-                'outtmpl': filepath,
-                'format': 'mp4/best',
-                'quiet': True,
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            return filepath
-
-
-        def extract_video_frames(path, output_dir="data/frames", fps=0.5) -> List[str]:
-            """
-            Extract frames from a video at the specified FPS
-            (e.g., 0.5 = one frame every 2 seconds).
-            Default of fps=0.5 is good. Only reduce FPS when .5 would generate too many frames
-            Saves frames to disk and returns list of file paths.
-            """
-            os.makedirs(output_dir, exist_ok=True)
-            cap = cv2.VideoCapture(path)
-
-            if not cap.isOpened():
-                raise ValueError(f"Failed to open video file: {path}")
-
-            video_fps = cap.get(cv2.CAP_PROP_FPS)
-            interval = int(video_fps / fps) if video_fps > 0 else int(1 / fps)
-            count = 0
-            saved_frames = 0
-            frames = []
-
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if count % interval == 0:
-                    frame_path = os.path.join(output_dir, f"frame_{saved_frames}.jpg")
-                    cv2.imwrite(frame_path, frame)
-                    frames.append(frame_path)
-                    saved_frames += 1
-                count += 1
-
-            cap.release()
-            return frames
 
 
         self.whisper_tool = FunctionTool.from_defaults(
-            fn=transcribe_audio_tool,
+            fn=audio.transcribe_audio_tool,
             name="WhisperTranscription",
             description="""Use this to transcribe audio files (mp3, wav, etc.)
             Args:
@@ -117,7 +44,7 @@ class BasicAgent:
             )
 
         self.youtube_download_tool = FunctionTool.from_defaults(
-            fn=download_youtube_video,
+            fn=vid.download_youtube_video,
             name="YoutubeDownload",
             description="""Use this to download a video from youtube
             Args:
@@ -126,7 +53,7 @@ class BasicAgent:
             )
 
         self.frame_extraction_tool = FunctionTool.from_defaults(
-            fn=extract_video_frames,
+            fn=vid.extract_video_frames,
             name="FrameExtract",
             description="""Use this to extract frames from a video file
             Args:
@@ -136,7 +63,7 @@ class BasicAgent:
             """
             )
 
-        self.youtube_audio_tool = FunctionTool.from_defaults(fn=transcribe_youtube, name="TranscribeYouTube")
+        self.youtube_audio_tool = FunctionTool.from_defaults(fn=audio.transcribe_youtube, name="TranscribeYouTube")
 
         self.wiki = WikipediaToolSpec().to_tool_list()
         self.web = TavilyToolSpec(api_key=tavily_key).to_tool_list()
@@ -183,7 +110,7 @@ class BasicAgent:
                                         - The final answer must be as short and specific as possible — usually a number, a string, or a comma-separated list.
                                         - Do not describe what you are about to do. Output the final result only.
                                             """,
-                            llm=self.multilodal_llm,  # likely GPT-4.1
+                            llm=self.multimodal_llm,  # likely GPT-4.1
                             tools=[self.youtube_download_tool, self.frame_extraction_tool],
                             can_handoff_to=["ControllerAgent"]
                         )
