@@ -62,15 +62,16 @@ python app/main.py
 
 ## 📂 Folder Structure
 
+```
 llamaindex-gaia-agent/
-├── agent/                 # Core agent logic and controller
+├── agents/                 # Core agent logic and controller
 ├── tools/                 # Video, audio, and search tools
 ├── data/                  # Sample inputs and outputs
-├── app/                   # Gradio or CLI interface
+├── app.py                 # Gradio interface
 ├── .env.example           # Example environment variables
-├── main.py                # Entrypoint (or app.py for Spaces)
 ├── requirements.txt
 └── README.md
+```
 
 ## 🧪 .env Configuration
 
