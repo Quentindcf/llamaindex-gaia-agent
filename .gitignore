@@ -2,5 +2,11 @@
 .env
 frames/*
 downloads/*
+data/*
+.vscode/*
 
-!frames/.gitkeep
+!data/.gitkeep
+!data/frames/
+
+data/frames/*
+!data/frames/.gitkeep
